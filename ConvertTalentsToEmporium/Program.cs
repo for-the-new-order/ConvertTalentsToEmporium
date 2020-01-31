@@ -118,7 +118,10 @@ namespace ConvertTalentsToEmporium
             var talents = await Deserialize(source, isSourceYaml);
             foreach (var talent in talents)
             {
-                talentBuilder.Add(talent);
+                if (string.IsNullOrEmpty(talent.Depreciated))
+                {
+                    talentBuilder.Add(talent);
+                }
             }
         }
 
@@ -168,6 +171,7 @@ namespace ConvertTalentsToEmporium
         {
             if (talentCount++ > 0) { _json.Append(","); }
 
+
             var formattedName = FormatName(talent.Name);
             _json.Append($"\"{formattedName}\":");
 
@@ -178,7 +182,7 @@ namespace ConvertTalentsToEmporium
 
         private EmporiumTalent Map(WebTalent talent)
         {
-            return new EmporiumTalent
+            var result = new EmporiumTalent
             {
                 Activation = talent.Activation != "Passive",
                 Description = talent.Text,
@@ -187,6 +191,20 @@ namespace ConvertTalentsToEmporium
                 Tier = talent.Tier,
                 Turn = ParseTurn(talent.Activation)
             };
+
+            var isRealmsOfTerrinoth = (talent.Source?.Contains("ROT")).GetValueOrDefault();
+            if (isRealmsOfTerrinoth)
+            {
+                result.Setting = new[] { "Fantasy" };
+            }
+
+            var isShadowOfTheBeanstalk = (talent.Source?.Contains("SOTB")).GetValueOrDefault();
+            if (isShadowOfTheBeanstalk)
+            {
+                result.Setting = new[] { "Steampunk" };
+            }
+
+            return result;
         }
 
         private readonly Regex _parseTurnRegex = new Regex("Active \\((?<turn>[^\\)]+)\\)");
