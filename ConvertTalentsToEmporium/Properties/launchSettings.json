@@ -1,0 +1,16 @@
+{
+  "profiles": {
+    "team-presence-talents": {
+      "commandName": "Project",
+      "commandLineArgs": "E:\\Repos\\for-the-new-order\\for-the-new-order.github.io\\_data\\team-presence-talents.json E:\\Repos\\for-the-new-order\\for-the-new-order.github.io\\_data\\exported.json"
+    },
+    "talents-squadron-leader": {
+      "commandName": "Project",
+      "commandLineArgs": "E:\\Repos\\for-the-new-order\\for-the-new-order.github.io\\_data\\talents-squadron-leader.yml E:\\Repos\\for-the-new-order\\for-the-new-order.github.io\\_data\\exported.json"
+    },
+    "talents": {
+      "commandName": "Project",
+      "commandLineArgs": "E:\\Repos\\for-the-new-order\\for-the-new-order.github.io\\_data\\talents.json E:\\Repos\\for-the-new-order\\for-the-new-order.github.io\\_data\\exported.json"
+    }
+  }
+}
