@@ -21,7 +21,6 @@ namespace ConvertTalentsToEmporium
         {
             if (talentCount++ > 0) { _json.Append(","); }
 
-
             var formattedName = FormatName(talent.Name);
             _json.Append($"\"{formattedName}\":");
 

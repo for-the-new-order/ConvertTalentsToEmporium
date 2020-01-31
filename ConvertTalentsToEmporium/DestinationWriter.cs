@@ -15,7 +15,7 @@ namespace ConvertTalentsToEmporium
 
         public async Task SaveAsync(string destinationPath)
         {
-            var json = _emporiumBuilder.ToString();
+            var json = _emporiumBuilder.ToJson();
             await File.WriteAllTextAsync(destinationPath, json);
         }
     }

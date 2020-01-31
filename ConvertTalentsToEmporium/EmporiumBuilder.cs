@@ -30,10 +30,9 @@ namespace ConvertTalentsToEmporium
             _json.Append(@"}}}]");
         }
 
-        public override string ToString()
+        public string ToJson()
         {
             return _json.ToString();
         }
-
     }
 }
