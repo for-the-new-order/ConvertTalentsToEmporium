@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Microsoft.Extensions.DependencyInjection;
+using System;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -14,33 +15,39 @@ namespace ConvertTalentsToEmporium
     {
         static async Task Main(string[] args)
         {
-            Console.WriteLine("Starting...");
-            var path = FindPath(args);
-            var jsonOptions = new JsonSerializerOptions
-            {
-                IgnoreNullValues = true,
-                WriteIndented = false
-            };
-            var yamlDeserializer = new DeserializerBuilder()
-                .IgnoreUnmatchedProperties()
-                .Build();
-            var talentConverter = new SourceConverter(jsonOptions, yamlDeserializer);
-
-            var emporiumBuilder = new EmporiumBuilder();
-            using (var talentBuilder = emporiumBuilder.Create(jsonOptions))
-            {
-                foreach (var source in path.sourcePaths)
+            var serviceProvider = new ServiceCollection()
+                .AddSingleton(new JsonSerializerOptions
                 {
-                    await talentConverter.ConvertAsync(source, talentBuilder);
-                }
-            }
+                    IgnoreNullValues = true,
+                    WriteIndented = false
+                })
+                .AddSingleton(new DeserializerBuilder()
+                    .IgnoreUnmatchedProperties()
+                    .Build()
+                )
+                .AddSingleton<SourceConverter>()
+                .AddSingleton<EmporiumBuilder>()
+                .AddSingleton<DestinationWriter>()
+                .AddSingleton<ConversionProcessor>()
+                .AddSingleton<PathEnforcer>()
+                .AddSingleton<StringBuilder>()
+                .AddSingleton<EmporiumTalentBuilder>()
+                .BuildServiceProvider()
+                ;
 
-            var destinationWriter = new DestinationWriter();
-            await destinationWriter.SaveAsync(path.destinationPath, emporiumBuilder);
+            var pathEnforcer = serviceProvider.GetService<PathEnforcer>();
+            var conversionProcessor = serviceProvider.GetService<ConversionProcessor>();
+
+            Console.WriteLine("Starting...");
+            var (sourcePaths, destinationPath) = pathEnforcer.FindPath(args);
+            await conversionProcessor.ConvertFiles(sourcePaths, destinationPath);
             Console.WriteLine("Done!");
         }
+    }
 
-        private static (string[] sourcePaths, string destinationPath) FindPath(string[] args)
+    public class PathEnforcer
+    {
+        public (string[] sourcePaths, string destinationPath) FindPath(string[] args)
         {
             if (args.Length >= 2)
             {
@@ -60,7 +67,7 @@ namespace ConvertTalentsToEmporium
             }
         }
 
-        private static string EnforceValidPath(string path, PathType pathType)
+        private string EnforceValidPath(string path, PathType pathType)
         {
             if (path == null)
             {
@@ -84,18 +91,50 @@ namespace ConvertTalentsToEmporium
             return path;
         }
 
-        public enum PathType
+        private enum PathType
         {
-            Source, 
+            Source,
             Destination
+        }
+    }
+
+    public class ConversionProcessor
+    {
+        private readonly EmporiumBuilder _emporiumBuilder;
+        private readonly SourceConverter _sourceConverter;
+        private readonly DestinationWriter _destinationWriter;
+
+        public ConversionProcessor(EmporiumBuilder emporiumBuilder, SourceConverter sourceConverter, DestinationWriter destinationWriter)
+        {
+            _emporiumBuilder = emporiumBuilder ?? throw new ArgumentNullException(nameof(emporiumBuilder));
+            _sourceConverter = sourceConverter ?? throw new ArgumentNullException(nameof(sourceConverter));
+            _destinationWriter = destinationWriter ?? throw new ArgumentNullException(nameof(destinationWriter));
+        }
+
+        public async Task ConvertFiles(string[] sourcePaths, string destinationPath)
+        {
+            _emporiumBuilder.Begin();
+            foreach (var source in sourcePaths)
+            {
+                await _sourceConverter.ConvertAsync(source, _emporiumBuilder);
+            }
+            _emporiumBuilder.End();
+            await _destinationWriter.SaveAsync(destinationPath);
         }
     }
 
     public class DestinationWriter
     {
-        public async Task SaveAsync(string destinationPath, EmporiumBuilder emporiumBuilder)
+        private readonly EmporiumBuilder _emporiumBuilder;
+
+        public DestinationWriter(EmporiumBuilder emporiumBuilder)
         {
-            var json = emporiumBuilder.ToString();
+            _emporiumBuilder = emporiumBuilder ?? throw new ArgumentNullException(nameof(emporiumBuilder));
+        }
+
+        public async Task SaveAsync(string destinationPath)
+        {
+            var json = _emporiumBuilder.ToString();
             await File.WriteAllTextAsync(destinationPath, json);
         }
     }
@@ -111,7 +150,7 @@ namespace ConvertTalentsToEmporium
             _yamlDeserializer = yamlDeserializer ?? throw new ArgumentNullException(nameof(yamlDeserializer));
         }
 
-        public async Task ConvertAsync(string sourcePath, EmporiumTalentBuilder talentBuilder)
+        public async Task ConvertAsync(string sourcePath, EmporiumBuilder builder)
         {
             var isSourceYaml = Path.GetExtension(sourcePath) == ".yml";
             using var source = File.OpenRead(sourcePath);
@@ -120,7 +159,7 @@ namespace ConvertTalentsToEmporium
             {
                 if (string.IsNullOrEmpty(talent.Depreciated))
                 {
-                    talentBuilder.Add(talent);
+                    builder.Add(talent);
                 }
             }
         }
@@ -141,12 +180,29 @@ namespace ConvertTalentsToEmporium
 
     public class EmporiumBuilder
     {
-        private readonly StringBuilder _json = new StringBuilder();
+        private readonly StringBuilder _json;
+        private readonly EmporiumTalentBuilder _emporiumTalentBuilder;
 
-        public EmporiumTalentBuilder Create(JsonSerializerOptions jsonOptions)
+        public EmporiumBuilder(StringBuilder json, EmporiumTalentBuilder emporiumTalentBuilder)
         {
+            _json = json ?? throw new ArgumentNullException(nameof(json));
+            _emporiumTalentBuilder = emporiumTalentBuilder ?? throw new ArgumentNullException(nameof(emporiumTalentBuilder));
+        }
+
+        public void Begin()
+        {
+            _json.Clear();
             _json.Append(@"[{""customData"": {""customTalents"": {");
-            return new EmporiumTalentBuilder(_json, jsonOptions);
+        }
+
+        public void Add(WebTalent talent)
+        {
+            _emporiumTalentBuilder.Add(talent);
+        }
+
+        public void End()
+        {
+            _json.Append(@"}}}]");
         }
 
         public override string ToString()
@@ -155,7 +211,7 @@ namespace ConvertTalentsToEmporium
         }
 
     }
-    public class EmporiumTalentBuilder : IDisposable
+    public class EmporiumTalentBuilder
     {
         private readonly StringBuilder _json;
         private readonly JsonSerializerOptions _jsonOptions;
@@ -227,11 +283,6 @@ namespace ConvertTalentsToEmporium
                 return sanitizedName.Substring(0, MaxNameLength);
             }
             return sanitizedName;
-        }
-
-        public void Dispose()
-        {
-            _json.Append(@"}}}]");
         }
     }
 
