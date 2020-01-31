@@ -16,31 +16,47 @@ namespace ConvertTalentsToEmporium
         {
             Console.WriteLine("Starting...");
             var path = FindPath(args);
-            var yamlDeserializer = new DeserializerBuilder()
-                .IgnoreUnmatchedProperties()
-                .Build();
-            var talentConverter = new TalentConverter(new JsonSerializerOptions
+            var jsonOptions = new JsonSerializerOptions
             {
                 IgnoreNullValues = true,
                 WriteIndented = false
-            }, yamlDeserializer);
-            await talentConverter.ConvertAsync(path.sourcePath, path.destinationPath);
+            };
+            var yamlDeserializer = new DeserializerBuilder()
+                .IgnoreUnmatchedProperties()
+                .Build();
+            var talentConverter = new SourceConverter(jsonOptions, yamlDeserializer);
+
+            var emporiumBuilder = new EmporiumBuilder();
+            using (var talentBuilder = emporiumBuilder.Create(jsonOptions))
+            {
+                foreach (var source in path.sourcePaths)
+                {
+                    await talentConverter.ConvertAsync(source, talentBuilder);
+                }
+            }
+
+            var destinationWriter = new DestinationWriter();
+            await destinationWriter.SaveAsync(path.destinationPath, emporiumBuilder);
             Console.WriteLine("Done!");
         }
 
-        private static (string sourcePath, string destinationPath) FindPath(string[] args)
+        private static (string[] sourcePaths, string destinationPath) FindPath(string[] args)
         {
-            if (args.Length == 2)
+            if (args.Length >= 2)
             {
-                var source = EnforceValidPath(args[0], PathType.Source);
-                var dest = EnforceValidPath(args[1], PathType.Destination);
-                return (source, dest);
+                var sources = new string[args.Length - 1];
+                for (int i = 0; i < args.Length - 1; i++)
+                {
+                    sources[i] = EnforceValidPath(args[i], PathType.Source);
+                }
+                var dest = EnforceValidPath(args[args.Length - 1], PathType.Destination);
+                return (sources, dest);
             }
             else
             {
                 var source = EnforceValidPath(null, PathType.Source);
                 var dest = EnforceValidPath(null, PathType.Destination);
-                return (source, dest);
+                return (new[] { source }, dest);
             }
         }
 
@@ -75,33 +91,35 @@ namespace ConvertTalentsToEmporium
         }
     }
 
-    public class TalentConverter
+    public class DestinationWriter
     {
-        private readonly JsonSerializerOptions _jsonOptions;
-        private readonly Deserializer _yamlDeserializer;
+        public async Task SaveAsync(string destinationPath, EmporiumBuilder emporiumBuilder)
+        {
+            var json = emporiumBuilder.ToString();
+            await File.WriteAllTextAsync(destinationPath, json);
+        }
+    }
 
-        public TalentConverter(JsonSerializerOptions jsonOptions, Deserializer yamlDeserializer)
+    public class SourceConverter
+    {
+        private readonly Deserializer _yamlDeserializer;
+        private readonly JsonSerializerOptions _jsonOptions;
+
+        public SourceConverter(JsonSerializerOptions jsonOptions, Deserializer yamlDeserializer)
         {
             _jsonOptions = jsonOptions ?? throw new ArgumentNullException(nameof(jsonOptions));
             _yamlDeserializer = yamlDeserializer ?? throw new ArgumentNullException(nameof(yamlDeserializer));
         }
 
-        public async Task ConvertAsync(string sourcePath, string destinationPath)
+        public async Task ConvertAsync(string sourcePath, EmporiumTalentBuilder talentBuilder)
         {
             var isSourceYaml = Path.GetExtension(sourcePath) == ".yml";
-
             using var source = File.OpenRead(sourcePath);
             var talents = await Deserialize(source, isSourceYaml);
-            var emporiumBuilder = new EmporiumBuilder();
-            using (var talentBuilder = emporiumBuilder.Create(_jsonOptions))
+            foreach (var talent in talents)
             {
-                foreach (var talent in talents)
-                {
-                    talentBuilder.Add(talent);
-                }
+                talentBuilder.Add(talent);
             }
-            var json = emporiumBuilder.ToString();
-            await File.WriteAllTextAsync(destinationPath, json);
         }
 
         private async Task<WebTalent[]> Deserialize(FileStream source, bool isYaml)
@@ -133,69 +151,69 @@ namespace ConvertTalentsToEmporium
             return _json.ToString();
         }
 
-        public class EmporiumTalentBuilder : IDisposable
+    }
+    public class EmporiumTalentBuilder : IDisposable
+    {
+        private readonly StringBuilder _json;
+        private readonly JsonSerializerOptions _jsonOptions;
+
+        public EmporiumTalentBuilder(StringBuilder json, JsonSerializerOptions jsonOptions)
         {
-            private readonly StringBuilder _json;
-            private readonly JsonSerializerOptions _jsonOptions;
+            _json = json ?? throw new ArgumentNullException(nameof(json));
+            _jsonOptions = jsonOptions ?? throw new ArgumentNullException(nameof(jsonOptions));
+        }
 
-            public EmporiumTalentBuilder(StringBuilder json, JsonSerializerOptions jsonOptions)
+        private int talentCount = 0;
+        public void Add(WebTalent talent)
+        {
+            if (talentCount++ > 0) { _json.Append(","); }
+
+            var formattedName = FormatName(talent.Name);
+            _json.Append($"\"{formattedName}\":");
+
+            var emporiumTalent = Map(talent);
+            var jsonObject = JsonSerializer.Serialize(emporiumTalent, _jsonOptions);
+            _json.Append(jsonObject);
+        }
+
+        private EmporiumTalent Map(WebTalent talent)
+        {
+            return new EmporiumTalent
             {
-                _json = json ?? throw new ArgumentNullException(nameof(json));
-                _jsonOptions = jsonOptions ?? throw new ArgumentNullException(nameof(jsonOptions));
-            }
+                Activation = talent.Activation != "Passive",
+                Description = talent.Text,
+                Name= talent.Name,
+                Ranked= talent.Ranked == "Yes",
+                Tier = talent.Tier,
+                Turn = ParseTurn(talent.Activation)
+            };
+        }
 
-            private int talentCount = 0;
-            public void Add(WebTalent talent)
+        private readonly Regex _parseTurnRegex = new Regex("Active \\((?<turn>[^\\)]+)\\)");
+        private string ParseTurn(string activation)
+        {
+            if (_parseTurnRegex.IsMatch(activation))
             {
-                if (talentCount++ > 0) { _json.Append(","); }
-
-                var formattedName = FormatName(talent.Name);
-                _json.Append($"\"{formattedName}\":");
-
-                var emporiumTalent = Map(talent);
-                var jsonObject = JsonSerializer.Serialize(emporiumTalent, _jsonOptions);
-                _json.Append(jsonObject);
+                return _parseTurnRegex.Match(activation).Groups["turn"].Value;
             }
+            return null;
+        }
 
-            private EmporiumTalent Map(WebTalent talent)
+        private readonly Regex _nameRegex = new Regex("[^a-zA-Z]");
+        private const int MaxNameLength = 24;
+        private string FormatName(string name)
+        {
+            var sanitizedName = _nameRegex.Replace(name, "");
+            if (sanitizedName.Length > MaxNameLength)
             {
-                return new EmporiumTalent
-                {
-                    Activation = talent.Activation != "Passive",
-                    Description = talent.Text,
-                    Name= talent.Name,
-                    Ranked= talent.Ranked == "Yes",
-                    Tier = talent.Tier,
-                    Turn = ParseTurn(talent.Activation)
-                };
+                return sanitizedName.Substring(0, MaxNameLength);
             }
+            return sanitizedName;
+        }
 
-            private readonly Regex _parseTurnRegex = new Regex("Active \\((?<turn>[^\\)]+)\\)");
-            private string ParseTurn(string activation)
-            {
-                if (_parseTurnRegex.IsMatch(activation))
-                {
-                    return _parseTurnRegex.Match(activation).Groups["turn"].Value;
-                }
-                return null;
-            }
-
-            private readonly Regex _nameRegex = new Regex("[^a-zA-Z]");
-            private const int MaxNameLength = 24;
-            private string FormatName(string name)
-            {
-                var sanitizedName = _nameRegex.Replace(name, "");
-                if (sanitizedName.Length > MaxNameLength)
-                {
-                    return sanitizedName.Substring(0, MaxNameLength);
-                }
-                return sanitizedName;
-            }
-
-            public void Dispose()
-            {
-                _json.Append(@"}}}]");
-            }
+        public void Dispose()
+        {
+            _json.Append(@"}}}]");
         }
     }
 
