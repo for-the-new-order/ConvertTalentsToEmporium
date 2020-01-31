@@ -1,4 +1,4 @@
-# ConvertTalentsToEmporium
+# Convert talents to Emporium
 Convert JSON/YAML talents used by the website (Jekyll) to the character sheet ("Genesys Emporium") format.
 
 ## How to use
